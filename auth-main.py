@@ -34,6 +34,9 @@ class User(BaseModel):
     username: str
     email: Union[str, None] = None
     fullname: Union[str, None] = None
+    tc_id: Union[str,None] = None
+    cc_number: Union[str,None] = None
+    status: Union[str,None] = None
 
 
 class UserInDB(User):
@@ -61,7 +64,10 @@ def get_user(db, username: str):
                 "username": user_obj[1],
                 "fullname": user_obj[2],
                 "email": user_obj[3],
-                "hashed_password": user_obj[4]
+                "hashed_password": user_obj[4],
+                'tc_id': user_obj[5],
+                'cc_number': user_obj[6],
+                'status': user_obj[7]
             }
             return UserInDB(**tempObj)
 
@@ -75,12 +81,21 @@ def authenticate_user(users, username: str, password: str):
     return user
 
 
-def create_access_token(data: dict, expires_delta: Union[timedelta, None] = None):
+def create_access_token(user, data: dict, expires_delta: Union[timedelta, None] = None):
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
         expire = datetime.utcnow() + timedelta(minutes=15)
+    expire_timestamp = datetime.timestamp(expire)
+    now_timestamp = datetime.now().timestamp()
+    if expire_timestamp > now_timestamp:
+        try:
+            cur.execute('UPDATE users SET status = ? WHERE email = ?', ('enabled', user.email))
+            con.commit()
+        except Exception as e:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail="Veritabanı güncellemesi sırasında bir hata oluştu.")
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
@@ -109,12 +124,7 @@ def update_user(username: str, fullname: str, email: str):
     try:
         cur.execute('UPDATE users SET username = ?, fullname = ? WHERE email = ?', (username, fullname, email))
         con.commit()
-        edited_user = {
-            "username": username,
-            "fullname": fullname,
-            "email": email
-        }
-        return edited_user
+        return True
     except Exception as e:
         con.rollback()
         raise HTTPException(status_code=500, detail="Veritabanı güncellemesi sırasında bir hata oluştu.")
@@ -123,6 +133,8 @@ def update_user(username: str, fullname: str, email: str):
 async def get_current_active_user(current_user: Annotated[User, Depends(get_current_user)]):
     if current_user is None:
         raise HTTPException(status_code=400, detail="User not found")
+    if current_user.status == 'disabled': 
+        raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
 
 
@@ -137,7 +149,7 @@ async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm,
         )
     access_token_expires = timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
     access_token = create_access_token(
-        data={"sub": user.username}, expires_delta=access_token_expires
+        user,data={"sub": user.username}, expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
@@ -153,7 +165,14 @@ async def edit_user(current_user: Annotated[User, Depends(get_current_active_use
     success = update_user(edit_username, edit_fullname, current_user.email)
     if not success:
         raise HTTPException(status_code=500, detail="Kullanıcı güncellemesi sırasında bir hata oluştu.")
-    return success
+    edited_user = {
+        'username': edit_username,
+        'fullname': edit_fullname,
+        'email': current_user.email,
+        'tc_id': current_user.tc_id,
+        'cc_number': current_user.cc_number
+    }
+    return edited_user
 
 @app.get("/users/me/items/")
 async def read_own_items(current_user: Annotated[User, Depends(get_current_active_user)]):
