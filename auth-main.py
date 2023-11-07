@@ -37,6 +37,7 @@ class User(BaseModel):
     tc_id: Union[str,None] = None
     cc_number: Union[str,None] = None
     status: Union[str,None] = None
+    roleid: Union[str,None] = None
 
 
 class UserInDB(User):
@@ -67,7 +68,8 @@ def get_user(db, username: str):
                 "hashed_password": user_obj[4],
                 'tc_id': user_obj[5],
                 'cc_number': user_obj[6],
-                'status': user_obj[7]
+                'status': user_obj[7],
+                'roleid': str(user_obj[9])
             }
             return UserInDB(**tempObj)
 
@@ -132,9 +134,9 @@ def update_user(username: str, fullname: str, email: str):
 
 async def get_current_active_user(current_user: Annotated[User, Depends(get_current_user)]):
     if current_user is None:
-        raise HTTPException(status_code=400, detail="User not found")
+        raise HTTPException(status_code=400, detail="Kullanıcı Bulunamadı")
     if current_user.status == 'disabled': 
-        raise HTTPException(status_code=400, detail="Inactive user")
+        raise HTTPException(status_code=400, detail="Inaktif Kullanıcı")
     return current_user
 
 
@@ -170,11 +172,27 @@ async def edit_user(current_user: Annotated[User, Depends(get_current_active_use
         'fullname': edit_fullname,
         'email': current_user.email,
         'tc_id': current_user.tc_id,
-        'cc_number': current_user.cc_number
+        'cc_number': current_user.cc_number,
+        'status': current_user.status,
+        'roleid': current_user.roleid
     }
     return edited_user
+
+@app.delete("/users/{user_id}/")
+async def read_users_me(user_id: int, current_user: Annotated[User, Depends(get_current_active_user)]):
+    if current_user.roleid != '1':
+        raise HTTPException(status_code=400, detail="Yetkiniz bulunmamaktadır.")
+    if current_user.roleid == '1' and current_user.status != "enabled":
+        raise HTTPException(status_code=400, detail="Kullanıcı aktif degil.")
+    try:
+        cur.execute(f'delete from users where userid={int(user_id)}')
+        con.commit()
+    except Exception as e:
+        con.rollback()
+        raise HTTPException(status_code=500, detail="Veritabanı güncellemesi sırasında bir hata oluştu.")
+    return {'detail': 'Kullanıcı silindi.'}
+
 
 @app.get("/users/me/items/")
 async def read_own_items(current_user: Annotated[User, Depends(get_current_active_user)]):
     return [{"item_id": "Foo", "owner": current_user.username}]
-
